@@ -3,7 +3,7 @@ use axum::{
     extract::{Host, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use nanoid::nanoid;
@@ -47,6 +47,7 @@ struct StreamResponse {
     name: String,
     url: String,
     m3u8_url: String,
+    proxy: String,
     status: String,
     metadata: StreamMetadata,
 }
@@ -104,9 +105,10 @@ async fn main() {
         .route("/api/auth/init", post(init_admin))
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
-        .route("/api/streams", post(add_handler).get(list_handler)) // 合并路由写法
+        .route("/api/streams", post(add_handler).get(list_handler))
         .route("/api/streams/events", get(sse_handler)) 
-        .route("/api/streams/:id", delete(stop_handler))
+        // .route("/api/streams/:id", delete(stop_handler))
+        .route("/api/streams/:id", post(update_handler).delete(stop_handler))
         .route("/api/streams/:id/start", post(start_stream_handler))
         .route("/api/streams/:id/stop", post(stop_stream_handler))
         .route("/api/playlist.m3u", get(playlist_handler))
@@ -233,10 +235,11 @@ async fn sse_handler(
         .map(move |_| {
             let procs = state.processes.try_lock();
             let list: Vec<StreamResponse> = if let Ok(p) = procs {
-                p.iter().map(|(id, (name, url, child, _, metadata, _))| StreamResponse {
+                p.iter().map(|(id, (name, url, child, _time, metadata, proxy))| StreamResponse {
                     id: id.clone(),
                     name: name.clone(),
                     url: url.clone(),
+                    proxy: proxy.clone(),
                     m3u8_url: format!("/live/{}/index.m3u8", id),
                     status: if child.is_some() { "Running" } else { "Standby" }.to_string(),
                     metadata: metadata.clone(),
@@ -285,7 +288,8 @@ async fn add_handler(
     Json(StreamResponse { 
         id: id.clone(), 
         name: payload.name, 
-        url: payload.url, 
+        url: payload.url,
+        proxy: payload.proxy,
         m3u8_url: format!("/live/{}/index.m3u8", id), 
         status: "Standby".to_string(), 
         metadata 
@@ -301,9 +305,10 @@ async fn list_handler(
     }
 
     let procs = state.processes.lock().await;
-    let list: Vec<StreamResponse> = procs.iter().map(|(id, (name, url, child, _, metadata, _))| StreamResponse {
+    let list: Vec<StreamResponse> = procs.iter().map(|(id, (name, url, child, _, metadata, proxy))| StreamResponse {
         id: id.clone(), name: name.clone(), url: url.clone(),
         m3u8_url: format!("/live/{}/index.m3u8", id),
+        proxy: proxy.clone(),
         status: if child.is_some() { "Running" } else { "Standby" }.to_string(),
         metadata: metadata.clone(),
     }).collect();
@@ -383,7 +388,44 @@ async fn stop_handler(
     Json(serde_json::json!({"status": "deleted"})).into_response()
 }
 
-// --- 辅助逻辑 (保持不变) ---
+async fn update_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<StreamConfig>
+) -> impl IntoResponse {
+    if !is_authenticated(&headers) {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    // 1. 更新数据库
+    let write_txn = state.db.begin_write().unwrap();
+    {
+        let mut table = write_txn.open_table(STREAMS_TABLE).unwrap();
+        // 确保 ID 一致
+        let mut cfg = payload.clone();
+        cfg.id = id.clone(); 
+        table.insert(id.as_str(), serde_json::to_string(&cfg).unwrap().as_str()).unwrap();
+    }
+    write_txn.commit().unwrap();
+
+    // 2. 更新内存状态
+    let mut procs = state.processes.lock().await;
+    if let Some(existing) = procs.get_mut(&id) {
+        // 更新名称、URL、代理、元数据
+        // 注意元组顺序：(name, url, child, last_access, metadata, proxy)
+        existing.0 = payload.name;
+        existing.1 = payload.url;
+        existing.5 = payload.proxy;
+        
+        // 如果流正在运行，建议先停止它，让用户手动重启或在此处自动重启
+        if let Some(mut child) = existing.2.take() {
+            let _ = child.kill().await;
+        }
+    }
+
+    (StatusCode::OK, "Updated").into_response()
+}
 
 async fn load_configs_to_memory(state: Arc<AppState>) {
     let read_txn = state.db.begin_read().unwrap();
