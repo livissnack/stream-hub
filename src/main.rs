@@ -10,7 +10,6 @@ use nanoid::nanoid;
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, process::Stdio, sync::Arc};
-use tokio::fs;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
@@ -585,8 +584,14 @@ async fn idle_cleanup_loop(state: Arc<AppState>) {
 }
 
 async fn ui_handler() -> impl IntoResponse {
-    match fs::read_to_string("index.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "index.html missing").into_response(),
+    // 在编译阶段将文件读入
+    // 注意：路径相对于 src/main.rs，如果 index.html 在根目录，请用 ../index.html
+    let html_content = include_str!("../index.html");
+
+    // 依然保留 IntoResponse 的结构
+    if html_content.is_empty() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "HTML content is empty").into_response();
     }
+
+    Html(html_content).into_response()
 }
