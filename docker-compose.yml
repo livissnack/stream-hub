@@ -1,0 +1,26 @@
+services:
+  stream-hub:
+    build: .
+    container_name: stream_hub
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - /dev/shm/stream_hub:/dev/shm/stream_hub
+    environment:
+      - TZ=Asia/Shanghai
+      - RUST_LOG=info
+      # 如果服务器访问某些源需要走代理，取消下面注释
+      # - http_proxy=http://your-proxy-ip:port
+      # - https_proxy=http://your-proxy-ip:port
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M

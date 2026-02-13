@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StreamHub</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        :root {
+            --system-bg: #f3f3f3;
+            --mica-bg: rgba(255, 255, 255, 0.75);
+            --accent-color: #0078d4;
+            --text-primary: #1b1b1b;
+            --text-secondary: #5d5d5d;
+            --control-fill: #ffffff;
+            --card-border: rgba(0, 0, 0, 0.08);
+            --radius-main: 8px;
+            --success: #107c10;
+            --danger: #c42b1c;
+        }
+
+        body {
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--system-bg);
+            background-image: radial-gradient(circle at 100% 0%, #deeaff 0%, #f3f3f3 50%);
+            margin: 0; padding: 40px 24px; min-height: 100vh; color: var(--text-primary);
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 30px; }
+        header h1 { font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -0.5px; }
+        header p { color: var(--text-secondary); margin: 5px 0 0 0; font-size: 14px; }
+
+        .fluent-card {
+            background: var(--mica-bg);
+            backdrop-filter: blur(40px) saturate(150%);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-main);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+            padding: 24px; margin-bottom: 24px;
+        }
+
+        .input-row { display: grid; grid-template-columns: 200px 1fr 1fr auto; gap: 12px; align-items: end; }
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+        
+        input {
+            background: var(--control-fill); border: 1px solid rgba(0,0,0,0.1);
+            border-bottom: 2px solid #868686; padding: 8px 12px; border-radius: 4px;
+            font-size: 14px; transition: all 0.15s;
+        }
+        input:focus { outline: none; border-bottom-color: var(--accent-color); background: #fff; }
+
+        .btn {
+            border: none; padding: 0 20px; border-radius: 4px; cursor: pointer;
+            font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; gap: 8px; 
+            transition: all 0.1s; height: 36px;
+        }
+        .btn-primary { background: var(--accent-color); color: white; }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-secondary { background: #fff; border: 1px solid rgba(0,0,0,0.1); color: var(--text-primary); }
+
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 12px; color: var(--text-secondary); padding: 12px 16px; border-bottom: 1px solid var(--card-border); text-transform: uppercase; }
+        td { padding: 16px; border-bottom: 1px solid var(--card-border); vertical-align: middle; }
+
+        .channel-name { font-weight: 600; font-size: 15px; display: block; }
+        .channel-id { font-size: 11px; color: #999; font-family: monospace; }
+        .meta-group { display: flex; gap: 6px; flex-wrap: wrap; }
+        .tag { font-size: 11px; background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 4px; color: var(--text-secondary); border: 1px solid rgba(0,0,0,0.05); }
+        .tag i { margin-right: 4px; font-size: 10px; }
+
+        .status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .dot-Running { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
+        .dot-Standby { background: #999; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+
+        #playerModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(12px); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-content { background: #fff; border-radius: 12px; width: 90%; max-width: 1000px; overflow: hidden; position: relative; }
+        .modal-header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--card-border); }
+        video { width: 100%; display: block; background: #000; aspect-ratio: 16/9; }
+
+        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
+        .toast { background: rgba(0, 0, 0, 0.8); color: white; padding: 12px 24px; border-radius: 8px; margin-bottom: 10px; font-size: 14px; display: flex; align-items: center; animation: slideIn 0.3s ease-out; }
+        .toast-icon { margin-right: 8px; color: #4caf50; }
+
+        #custom-confirm-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 10000; }
+        .confirm-box { background: white; padding: 24px; border-radius: 12px; width: 320px; text-align: center; }
+        .confirm-btns { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
+        .btn-confirm { background: var(--danger); color: white; border: none; padding: 8px 20px; border-radius: 4px; cursor: pointer; }
+        .btn-cancel { background: #f5f5f5; border: 1px solid #ddd; padding: 8px 20px; border-radius: 4px; cursor: pointer; }
+
+        @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .url-group {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* 通用的单行文本溢出省略 */
+        .url-text {
+            font-family: 'Cascadia Code', 'Consolas', monospace;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 450px; /* 根据你的显示器调整 */
+            display: block;
+        }
+
+        /* 原始输入源：深色背景，灰色文字，强调“外部源” */
+        .url-input {
+            background: rgba(0, 0, 0, 0.04);
+            color: #777;
+            border: 1px dashed rgba(0, 0, 0, 0.1);
+        }
+        .url-input::before {
+            content: "IN";
+            font-weight: bold;
+            margin-right: 6px;
+            color: #999;
+        }
+
+        /* 本地 M3U8：淡蓝色背景，蓝色文字，强调“可播放” */
+        .url-output {
+            background: rgba(0, 120, 212, 0.06);
+            color: var(--accent-color);
+            border: 1px solid rgba(0, 120, 212, 0.1);
+        }
+        .url-output::before {
+            content: "OUT";
+            font-weight: bold;
+            margin-right: 6px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div>
+            <h1>StreamHub Dashboard</h1>
+            <p>基于 FFMPEG 媒体服务管理</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div id="userDisplay" style="display: none; align-items: center; gap: 10px; background: rgba(0,0,0,0.05); padding: 5px 12px; border-radius: 20px; font-size: 13px;">
+                <i class="fa-solid fa-circle-user" style="color: var(--accent-color);"></i>
+                <span id="currentUsername" style="font-weight: 600;">Admin</span>
+                <div style="width: 1px; height: 12px; background: #ccc; margin: 0 5px;"></div>
+                <a href="javascript:void(0)" onclick="logout()" style="color: var(--danger); text-decoration: none; font-weight: 600; cursor: pointer;">退出</a>
+            </div>
+            <button class="btn btn-secondary" onclick="exportM3u()">
+                <i class="fa-solid fa-file-export"></i> 导出 M3U 订阅
+            </button>
+        </div>
+    </header>
+
+    <div class="fluent-card">
+        <div class="input-row">
+            <div class="field"><label>频道名称</label><input id="name" placeholder="CCTV-1"></div>
+            <div class="field"><label>输入源地址</label><input id="url" placeholder="rtsp://..."></div>
+            <div class="field"><label>SOCKS5 代理 (可选)</label><input id="proxy" placeholder="可选"></div>
+            <button class="btn btn-primary" onclick="addStream()" id="addBtn">添加并探测</button>
+        </div>
+    </div>
+
+    <div class="fluent-card" style="padding: 0; overflow: hidden;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="padding-left:24px;">媒体频道</th>
+                    <th>规格参数</th>
+                    <th>状态</th>
+                    <th style="text-align:right; padding-right:24px;">操作</th>
+                </tr>
+            </thead>
+            <tbody id="streamTableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div id="playerModal"><div class="modal-content"><div class="modal-header"><span id="playerTitle" style="font-weight:600"></span><i class="fa-solid fa-xmark" style="cursor:pointer" onclick="closePlayer()"></i></div><video id="videoPlayer" controls autoplay></video></div></div>
+
+<div id="authOverlay" style="display:none; position:fixed; inset:0; background:rgba(243,243,243,0.96); backdrop-filter:blur(20px); z-index:9999; align-items:center; justify-content:center;">
+    <div class="fluent-card" style="width:340px;">
+        <h2 id="authTitle" style="margin-top:0;">身份验证</h2>
+        <div class="field" style="margin-bottom:12px;">
+            <label>用户名</label>
+            <input id="authUser" placeholder="Username" onkeyup="if(event.key==='Enter') handleAuthSubmit()">
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+            <label>密码</label>
+            <input id="authPass" type="password" placeholder="Password" onkeyup="if(event.key==='Enter') handleAuthSubmit()">
+        </div>
+        
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 20px; cursor: pointer;">
+            <input type="checkbox" id="rememberMe" style="width: 16px; height: 16px; cursor: pointer;">
+            <label for="rememberMe" style="font-size: 13px; color: var(--text-secondary); cursor: pointer;">记住密码</label>
+        </div>
+
+        <button id="authBtn" class="btn btn-primary" style="width:100%; height:42px;" onclick="handleAuthSubmit()">登录</button>
+    </div>
+</div>
+
+<script>
+    let hls = new Hls();
+    let isInitialized = false;
+
+    // --- 恢复：退出登录 ---
+    async function logout() {
+        const confirmed = await customConfirm("退出登录", "确定要退出吗？");
+        if (!confirmed) return;
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        localStorage.removeItem('streamhub_user');
+        document.cookie = "login_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+        window.location.replace("/");
+    }
+
+    // --- 恢复：列表渲染 (带图标) ---
+    function renderList(data) {
+        const tbody = document.getElementById('streamTableBody');
+        const host = window.location.origin;
+        tbody.innerHTML = data.map(s => {
+            const isRunning = s.status === "Running";
+            const fullM3u8Url = host + s.m3u8_url;
+            return `
+            <tr>
+                <td style="padding-left:24px;">
+                    <span class="channel-name">${getProtocolIcon(s.url)} ${s.name}</span>
+                    <span class="channel-id">${s.id}</span>
+                </td>
+                <td>
+                    <div class="meta-group">
+                        <span class="tag"><i class="fa-solid fa-expand"></i>${s.metadata.resolution}</span>
+                        <span class="tag"><i class="fa-solid fa-film"></i>${s.metadata.video_codec}</span>
+                        <span class="tag"><i class="fa-solid fa-wave-square"></i>${s.metadata.audio_codec}</span>
+                        <span class="tag"><i class="fa-solid fa-microchip"></i>${s.metadata.channels}ch</span>
+                    </div>
+                    <div class="url-group">
+                        <span class="url-text url-input" title="原始源: ${s.url}">${s.url}</span>
+                        <span class="url-text url-output" title="本地流: ${fullM3u8Url}">${fullM3u8Url}</span>
+                    </div>
+                </td>
+                <td><div class="status-pill"><div class="dot dot-${s.status}"></div>${s.status}</div></td>
+                <td style="text-align:right; padding-right:24px;">
+                    ${isRunning ? 
+                        `<button class="btn btn-secondary" style="height:30px; color:var(--danger)" onclick="toggleStream('${s.id}', 'stop')"><i class="fa-solid fa-stop"></i> 停止</button>` :
+                        `<button class="btn btn-secondary" style="height:30px; color:var(--success)" onclick="toggleStream('${s.id}', 'start')"><i class="fa-solid fa-play"></i> 启动</button>`
+                    }
+                    <button class="btn btn-secondary" style="height:30px;" title="预览" onclick="previewStream('${host + s.m3u8_url}', '${s.name}')"><i class="fa-solid fa-eye"></i></button>
+                    <button class="btn btn-secondary" style="height:30px;" title="复制" onclick="copyUrl('${host + s.m3u8_url}')"><i class="fa-solid fa-link"></i></button>
+                    <button class="btn btn-secondary" style="height:30px; color:var(--danger)" title="删除" onclick="deleteStream('${s.id}')"><i class="fa-solid fa-trash"></i></button>
+                </td>
+            </tr>
+        `}).join('');
+    }
+
+    function getProtocolIcon(url) {
+        if (url.startsWith('rtsp')) return '<i class="fa-solid fa-video" title="RTSP"></i>';
+        if (url.startsWith('rtmp')) return '<i class="fa-solid fa-bolt" title="RTMP"></i>';
+        if (url.includes('m3u8')) return '<i class="fa-solid fa-play-circle" title="HLS"></i>';
+        return '<i class="fa-solid fa-link" title="HTTP"></i>';
+    }
+
+    async function toggleStream(id, action) {
+        try {
+            const res = await fetch(`/api/streams/${id}/${action}`, { method: 'POST' });
+            if (res.ok) {
+                showToast(action === 'start' ? "正在启动流服务..." : "已停止流服务");
+            } else {
+                showToast("操作失败");
+            }
+        } catch (e) {
+            showToast("请求异常");
+        }
+    }
+
+    // --- 恢复：复制功能 (完整版) ---
+    function copyUrl(url) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => showToast("播放地址已复制")).catch(() => fallbackCopy(url));
+        } else { fallbackCopy(url); }
+    }
+    function fallbackCopy(url) {
+        const ta = document.createElement("textarea"); ta.value = url; ta.style.position="fixed"; ta.style.left="-9999px";
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        showToast("播放地址已复制");
+    }
+
+    // --- 恢复：UI 组件 ---
+    function showToast(msg) {
+        let cnt = document.getElementById('toast-container') || Object.assign(document.createElement('div'), {id:'toast-container'});
+        if(!cnt.parentElement) document.body.appendChild(cnt);
+        const t = document.createElement('div'); t.className = 'toast';
+        t.innerHTML = `<span class="toast-icon">✓</span>${msg}`;
+        cnt.appendChild(t); setTimeout(() => t.remove(), 3000);
+    }
+
+    function customConfirm(title, msg) {
+        return new Promise(res => {
+            let ov = document.getElementById('custom-confirm-overlay') || Object.assign(document.createElement('div'), {id:'custom-confirm-overlay'});
+            if(!ov.parentElement) document.body.appendChild(ov);
+            ov.innerHTML = `<div class="confirm-box"><b>${title}</b><p>${msg}</p><div class="confirm-btns"><button class="btn-cancel" id="c-cancel">取消</button><button class="btn-confirm" id="c-ok">确定</button></div></div>`;
+            ov.style.display = 'flex';
+            document.getElementById('c-ok').onclick = () => { ov.style.display='none'; res(true); };
+            document.getElementById('c-cancel').onclick = () => { ov.style.display='none'; res(false); };
+        });
+    }
+
+    async function addStream() {
+        const name = document.getElementById('name').value;
+        const url = document.getElementById('url').value;
+        const proxy = document.getElementById('proxy').value;
+        const btn = document.getElementById('addBtn');
+
+        if (!name || !url) {
+            return showToast("请填写频道名称和源地址");
+        }
+
+        // 按钮状态反馈
+        btn.disabled = true;
+        btn.innerText = "正在探测媒体信息...";
+
+        try {
+            const res = await fetch('/api/streams', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url, proxy })
+            });
+
+            if (res.ok) {
+                showToast("添加成功！已开始后台分析");
+                // 清空输入框
+                document.getElementById('name').value = '';
+                document.getElementById('url').value = '';
+                document.getElementById('proxy').value = '';
+            } else {
+                const err = await res.text();
+                showToast("添加失败: " + err);
+            }
+        } catch (e) {
+            showToast("网络请求异常");
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "添加并探测";
+        }
+    }
+
+    // --- 鉴权与业务 ---
+    async function checkAuthStatus() {
+        const res = await fetch('/api/auth/status');
+        const data = await res.json();
+        isInitialized = data.initialized;
+        if (!isInitialized) { showAuthModal(true); } else {
+            const listRes = await fetch('/api/streams');
+            if (listRes.status === 401) { showAuthModal(false); } else {
+                const user = localStorage.getItem('streamhub_user') || 'Admin';
+                document.getElementById('currentUsername').innerText = user;
+                document.getElementById('userDisplay').style.display = 'flex';
+                renderList(await listRes.json());
+                initStatusStream();
+            }
+        }
+    }
+
+  // 修改后的提交函数：增加保存逻辑
+    async function handleAuthSubmit() {
+        const username = document.getElementById('authUser').value;
+        const password = document.getElementById('authPass').value;
+        const remember = document.getElementById('rememberMe').checked;
+
+        if (!username || !password) return showToast("请填写完整信息");
+
+        const endpoint = isInitialized ? '/api/auth/login' : '/api/auth/init';
+        
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+
+            if (res.ok) {
+                // 记住密码逻辑
+                if (remember) {
+                    localStorage.setItem('streamhub_credential', JSON.stringify({ user: username, pass: password }));
+                } else {
+                    localStorage.removeItem('streamhub_credential');
+                }
+                
+                localStorage.setItem('streamhub_user', username);
+                showToast("登录成功");
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast("验证失败，请重试");
+            }
+        } catch (e) {
+            showToast("请求出错，请检查后端连接");
+        }
+    }
+
+    function initStatusStream() {
+        const es = new EventSource('/api/streams/events');
+        es.onmessage = (e) => { const d = JSON.parse(e.data); if (Array.isArray(d)) renderList(d); };
+    }
+
+    // 显示/隐藏认证遮罩层
+    function showAuthModal(isInit) {
+        const overlay = document.getElementById('authOverlay');
+        if (!overlay) return;
+        
+        overlay.style.display = 'flex';
+        document.querySelector('#authOverlay h2').innerText = isInit ? "初始化管理员" : "身份验证";
+
+        // 如果本地存了信息，自动填入
+        const saved = JSON.parse(localStorage.getItem('streamhub_credential') || '{}');
+        if (saved.user) document.getElementById('authUser').value = saved.user;
+        if (saved.pass) {
+            document.getElementById('authPass').value = saved.pass;
+            document.getElementById('rememberMe').checked = true;
+        }
+    }
+
+    async function deleteStream(id) {
+        if(await customConfirm("删除", "确定删除该流吗？")) {
+            const res = await fetch(`/api/streams/${id}`, { method: 'DELETE' });
+            if(res.ok) showToast("已删除");
+        }
+    }
+
+    function previewStream(url, name) {
+        const m = document.getElementById('playerModal'), v = document.getElementById('videoPlayer');
+        document.getElementById('playerTitle').innerText = name; m.style.display = 'flex';
+        hls.destroy(); hls = new Hls(); hls.loadSource(url); hls.attachMedia(v);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => v.play());
+    }
+
+    function closePlayer() { document.getElementById('videoPlayer').pause(); document.getElementById('playerModal').style.display = 'none'; }
+    function exportM3u() { window.location.href = '/api/playlist.m3u'; }
+
+    document.addEventListener('DOMContentLoaded', checkAuthStatus);
+</script>
+</body>
+</html>
