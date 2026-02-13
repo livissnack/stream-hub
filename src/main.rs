@@ -462,7 +462,7 @@ async fn spawn_ffmpeg(url: &str, id: &str, base_dir: &str, proxy: &str) -> Child
     // 1. 基础参数 (通用伪装和协议白名单)
     let mut args = vec![
         "-loglevel".to_string(), "warning".to_string(),
-        "-user_agent".to_string(), "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
+        "-user_agent".to_string(), "APTV/1.0 (com.kimentanm.aptv; build:1; iOS 17.2.0)".to_string(),
         "-headers".to_string(), format!("Referer: {}\r\nAccept: */*\r\nConnection: keep-alive\r\n", referer),
         // 默认开启全协议白名单，防止嵌套协议加载失败
         "-protocol_whitelist".to_string(), "file,http,https,tcp,tls,rtp,udp,rtsp,crypto".to_string(),
@@ -474,30 +474,68 @@ async fn spawn_ffmpeg(url: &str, id: &str, base_dir: &str, proxy: &str) -> Child
         "-flags".to_string(), "low_delay".to_string(),
         "-probesize".to_string(), "15M".to_string(), 
         "-analyzeduration".to_string(), "15M".to_string(),
+        "-timeout".to_string(), "10000000".to_string(), // 10秒超时
+        "-reconnect".to_string(), "1".to_string(),
+        "-reconnect_at_eof".to_string(), "1".to_string(),
+        "-reconnect_streamed".to_string(), "1".to_string(),
+        "-reconnect_delay_max".to_string(), "2".to_string(),
+        "-rw_timeout".to_string(), "10000000".to_string(), // 10秒读写超时
     ]);
 
     // 3. 协议特定注入
     if url_lower.starts_with("rtsp://") {
         args.extend(["-rtsp_transport".to_string(), "tcp".to_string()]);
     } else if url_lower.contains(".m3u8") {
-        args.extend(["-allowed_extensions".to_string(), "ALL".to_string()]);
-    } else if url_lower.contains("/rtp/") {
-        // 移除报错的 fifo_size，改用更通用的 udp 缓冲区参数
-        args.extend(["-buffer_size".to_string(), "1024000".to_string()]);
+        args.extend([
+            "-allowed_extensions".to_string(), "ALL".to_string(),
+            "-flags".to_string(), "low_delay".to_string(),
+            "-f".to_string(), "hls".to_string(), 
+        ]);
+    } else if url_lower.starts_with("rtp://") || url_lower.starts_with("udp://") {
+        args.extend(["-buffer_size".to_string(), "10M".to_string()]);
+    } else if url_lower.contains(".flv") || url_lower.starts_with("rtmp://") {
+        // FLV 或 RTMP 流专用优化
+        args.extend([
+            "-fflags".to_string(), "nobuffer+igndts".to_string(),
+            "-analyzeduration".to_string(), "3000000".to_string(),
+            "-probesize".to_string(), "3000000".to_string(),
+        ]);
+    } else {
+        // 普通 HTTP/HTTPS/M3U8 源
+        args.extend(["-probesize".to_string(), "10M".to_string()]);
+        args.extend(["-analyzeduration".to_string(), "5M".to_string()]);
     }
-
+    let is_flv = url_lower.contains(".flv") || url_lower.starts_with("rtmp://");
     // 4. 注入输入源
     args.extend(["-i".to_string(), url.to_string()]);
 
     // 5. 统一输出层 (HLS)
+    if is_flv {
+        // 针对 FLV 的特殊输出配置：强制转码音频
+        args.extend([
+            "-c:v".to_string(), "copy".to_string(),
+            "-c:a".to_string(), "aac".to_string(),
+            "-ar".to_string(), "44100".to_string(),
+            "-ac".to_string(), "2".to_string(),
+            // 关键：针对 B帧 和 FLV 的时间戳修复
+            "-fflags".to_string(), "+genpts+igndts".to_string(), 
+            "-avoid_negative_ts".to_string(), "make_zero".to_string(),
+        ]);
+    } else {
+        // 普通源（如标准 M3U8/RTSP）继续使用全局 copy
+        args.extend(["-c".to_string(), "copy".to_string()]);
+    }
+
+    // 6. 共享的 HLS 配置
     args.extend([
-        "-c".to_string(), "copy".to_string(),
         "-f".to_string(), "hls".to_string(),
+        // "-bsf:v".to_string(), "h264_mp4toannexb,dump_extra".to_string(),
         "-hls_time".to_string(), "4".to_string(),
-        "-hls_list_size".to_string(), "6".to_string(),
-        "-hls_flags".to_string(), "delete_segments+append_list+independent_segments".to_string(),
+        "-hls_list_size".to_string(), "5".to_string(), // 1G 内存建议减少到 5 个
+        // 再次提醒：务必删除 append_list，否则 index.m3u8 会无限增长直到爆内存
+        "-hls_flags".to_string(), "delete_segments+independent_segments".to_string(),
         "-hls_segment_type".to_string(), "mpegts".to_string(),
-        "-hls_segment_filename".to_string(), format!("{}/seg_%d.ts", output_dir), // 显式命名切片
+        "-hls_segment_filename".to_string(), format!("{}/seg_%03d.ts", output_dir),
         format!("{}/index.m3u8", output_dir),
     ]);
 
@@ -509,7 +547,6 @@ async fn spawn_ffmpeg(url: &str, id: &str, base_dir: &str, proxy: &str) -> Child
        .stderr(Stdio::inherit())
        .kill_on_drop(true);
 
-    // 只有非内网且是非 RTP 地址时应用代理
     if !proxy.is_empty() && !url_lower.contains("172.16.") && !url_lower.starts_with("rtp://") {
         cmd.env("all_proxy", proxy).env("http_proxy", proxy).env("https_proxy", proxy);
     }
@@ -545,15 +582,29 @@ async fn stream_handler(Path((id, file)): Path<(String, String)>, State(state): 
         let mut procs = state.processes.lock().await;
         if let Some((_, _, child_opt, _, _, _)) = procs.get_mut(&id) { *child_opt = Some(child); }
         let m3u8_path = std::path::Path::new(&state.hls_base_dir).join(&id).join("index.m3u8");
-        for _ in 0..15 { // 最多等 3s
+        for _ in 0..50 { // 最多等 10s
              if m3u8_path.exists() { break; }
              sleep(Duration::from_millis(200)).await;
         }
     }
     let file_path = std::path::Path::new(&state.hls_base_dir).join(&id).join(&file);
+    
+    // 💡 物理路径调试日志 (排查 404 的终极武器)
+    println!("🔍 尝试读取文件: {:?}", file_path);
+
     match tokio::fs::read(&file_path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, if file.ends_with(".m3u8") { "application/x-mpegurl" } else { "video/MP2T" })], bytes).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Loading...").into_response(),
+        Ok(bytes) => {
+            let content_type = if is_m3u8 { "application/x-mpegurl" } else { "video/MP2T" };
+            ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
+        },
+        Err(_) => {
+            if is_m3u8 {
+                // 💡 如果是 m3u8 没准备好，返回 202 而不是 404，这样播放器会继续尝试
+                (StatusCode::ACCEPTED, "Warming up...").into_response()
+            } else {
+                (StatusCode::NOT_FOUND, "Not Found").into_response()
+            }
+        },
     }
 }
 

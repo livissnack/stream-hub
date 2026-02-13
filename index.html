@@ -444,7 +444,30 @@
         hls.on(Hls.Events.MANIFEST_PARSED, () => v.play());
     }
 
-    function closePlayer() { document.getElementById('videoPlayer').pause(); document.getElementById('playerModal').style.display = 'none'; }
+    function closePlayer() {
+        const video = document.getElementById('videoPlayer');
+        
+        // 1. 停止视频播放
+        video.pause();
+        
+        // 2. 彻底销毁 HLS 实例，停止所有网络请求
+        if (hls) {
+            hls.detachMedia(); // 脱离视频元素
+            hls.stopLoad();    // 停止加载切片
+            // 注意：这里不需要 destroy，因为你全局复用了 hls 变量
+            // 但为了保险，建议每次预览都重新 new 一个，或者像下面这样处理：
+        }
+        
+        // 3. 清空视频源，防止某些浏览器在后台继续缓冲
+        video.src = "";
+        video.load(); 
+
+        // 4. 隐藏模态框
+        document.getElementById('playerModal').style.display = 'none';
+        
+        showToast("播放器已关闭，连接已断开");
+    }
+    
     function exportM3u() { window.location.href = '/api/playlist.m3u'; }
 
     document.addEventListener('DOMContentLoaded', checkAuthStatus);
