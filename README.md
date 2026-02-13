@@ -1,10 +1,80 @@
-http://172.16.4.10:3000/live/bb7bcb46-ac39-45b3-9497-4445722cdc9f/index.m3u8
+# StreamHub 📺
+
+一个基于 **Rust (Axum)** 构建的极简直播流转发引擎。专为低功耗服务器（如 1G 内存 VPS）设计，支持按需启动 FFmpeg 进程，将各类流媒体协议转化为标准的 HLS (m3u8)。
 
 
-wget -O stream_hub https://github.com/livissnack/stream-hub/releases/download/v0.1.3/stream_hub && chmod +x stream_hub && ./stream_hub
+
+---
+
+## ✨ 核心特性
+
+* **智能资源调度**：
+    * **按需拉流**：只有当播放器请求 `.m3u8` 时才启动 FFmpeg 进程。
+    * **自动收割**：60 秒内无客户端访问，自动销毁 FFmpeg 进程，节省内存和 CPU。
+* **低内存优化**：
+    * 针对 1G 内存服务器调优，默认采用内存盘（`/dev/shm`）存储切片。
+    * 严格控制 HLS 播放列表长度（`hls_list_size 5`），防止磁盘 IO 阻塞。
+* **强悍的拉流能力**：
+    * **深度伪装**：默认伪装成 `APTV Player` 头部，绕过源站反爬限制。
+    * **自动重连**：针对网络抖动导致的 `End of file (EOF)` 报错，内置 5 秒快速重连机制。
+    * **协议通杀**：支持 RTSP, RTMP, FLV, M3U8, UDP/RTP 等输入。
+* **网络适配**：
+    * 内置 **SOCKS5/SOCKS5h** 代理支持，配合 `sing-box` 完美解决海外直播源访问问题。
+
+---
+
+## 🛠️ 环境要求
+
+* **FFmpeg**: 系统必须安装并配置在全局 `PATH` 中。
+* **Rust**: 编译需要 `Rust 1.70+` 环境。
+* **代理 (可选)**：推荐安装 `sing-box` 以支持 SOCKS5 代理。
+
+---
+
+## 🚀 快速开始
+
+### 1. 编译项目
+```bash
+cargo build --release
+```
+
+### 2. 启动服务
+```bash
+# 默认监听端口 3000
+./target/release/stream_hub
+```
+
+### 3. 配置管理
+
+访问 http://localhost:3000 即可进入管理后台：
+
+* **初次运行**: 系统会自动提示设置管理员账号。
+* **添加流**: 填入名称、原始流地址即可。
+* **代理填法**：socks5://username:password@127.0.0.1:1080。
+
+## 📁 目录结构与数据持久化
+
+* **配置存储**：采用本地嵌入式数据库 [redb](https://github.com/c1921b9a/redb)，启动后会在根目录生成 `streams_config.redb`。
+* **切片缓存 (HLS Segments)**：
+    * **Linux (推荐)**：使用内存盘路径 `/dev/shm/stream_hub`。利用 RAM 存储切片，极大降低磁盘读写损耗，提升 1G 内存服务器的 IO 效率。
+    * **Windows**：使用项目根目录下的 `./temp_streams/stream_hub`。
 
 
-socks5://livis:j4J8gzC42gXfcgaN@1.165.71.200:47899
+## 🔍 常见问题排查 (Troubleshooting)
+
+> [!TIP]
+> 遇到流无法播放时，请优先检查控制台实时打印的 FFmpeg 日志。
+
+| 现象 | 可能原因 | 解决方案 |
+| :--- | :--- | :--- |
+| **404 Not Found** | FFmpeg 尚未生成首个 `.ts` 切片。 | 检查流地址是否有效；程序默认等待 3-10 秒，若网络过慢可尝试增大等待阈值。 |
+| **End of file (EOF)** | 源服务器检测到异常访问并主动切断。 | 1. 确认 `User-Agent` 已设为 `APTV/1.0`。<br>2. 开启 **SOCKS5** 代理以更换出口 IP。 |
+| **Invalid Argument** | FFmpeg 启动参数冲突（如 HEVC 过滤器问题）。 | 检查 `spawn_ffmpeg` 逻辑中是否手动指定了不匹配的 `bsf:v`。 |
+| **路径解析失败** | Windows 混合斜杠 (`/` 与 `\\`) 导致文件定位错误。 | 程序已通过 `PathBuf` 逻辑自动兼容，请确保 `hls_base_dir` 配置正确。 |
 
 
-http://z3.ubtvfans.com/live/rx3/336/f485474bfd5bfa657745a54d77504625/index.m3u8
+## 📄 许可证 (License)
+
+本项目基于 **MIT License** 开源。
+
+> **免责声明**：本项目仅供技术交流与个人学习使用。用户在使用过程中应遵守当地法律法规，严禁将本项目用于任何非法转播、侵权盗版或其他违法行为。由此产生的法律责任由使用者自行承担。
